@@ -29,10 +29,10 @@ int main(int argc, char **argv) {
     MPI_Status status;
     if (rank == 0) {
         num_throws = get_input();
-        start_time = MPI_Wtime();
         long long int num_throws_per_thread = num_throws / size;
         long long int my_num_throws = num_throws_per_thread + num_throws % size;
         MPI_Bcast (&num_throws_per_thread, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+        start_time = MPI_Wtime();
         srand(time(NULL));
         for (i = 0; i < my_num_throws; i++) {
             x = 2 * ((double) rand() / (double) RAND_MAX) - 1;
