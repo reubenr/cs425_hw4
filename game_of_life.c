@@ -1,6 +1,7 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include<assert.h>
+#include<mpi.h>
 
 // Read initial board from stdin or file (via redirect) and return pointer to it
 // File format will be:
@@ -25,38 +26,126 @@ int next_value(int cur_val, int neighbors);
 int index1D(int r, int c, int columns) { return r * columns + c; }
 
 int main(int argc, char** argv) {
-    int rows, columns;
+    int rows, columns, rank, size, up_nbr, down_nbr;
+    int *board, *local_swap_board, *sendcounts, *offsets, *tmp_swap, *rows_columns;
     int generations;
-    int* board, *swap_board, *tmp_swap;
-
+    int *local_board;
     if (argc != 2) {
         printf("Usage: ./life.x [generations]\n");
         exit(1);
     }
 
-    board = get_initial_board(&rows, &columns);
-    swap_board = malloc(sizeof(int) * rows * columns);
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Status status;
+    board = NULL;
+    rows_columns = malloc(sizeof(int) * 2);
+    if (rank == 0) {
+        board = get_initial_board(&rows, &columns);
+        rows_columns[0] = rows;
+        rows_columns[1] = columns;
+        MPI_Bcast(rows_columns, 2, MPI_INT, 0, MPI_COMM_WORLD);
+        //write_board(board, rows, columns);
+    }
+    else {
+        MPI_Bcast(rows_columns, 2, MPI_INT, 0, MPI_COMM_WORLD);
+        rows = rows_columns[0];
+        columns = rows_columns[1];
+    }
     generations = atoi(argv[1]);
-    printf("Rows: %d; Columns: %d\n", rows, columns); // debug
+    //printf("Rows: %d; Columns: %d\n", rows, columns); // debug
 
-    for (int gen = 0; gen < generations; gen++) {
-        generation(swap_board, board, rows, columns);
+    sendcounts = malloc(sizeof(int) * size);
 
-        // Swap pointers
-        tmp_swap = board;
-        board = swap_board;
-        swap_board = tmp_swap;
- 
-        // Leave on for debugging, turn off for real run
-        write_board(board, rows, columns);
-        printf("\n");
+    for (int i = 0; i < size; i++) {
+        sendcounts[i] = columns * ((rows / size) + 1);
+    }
+    int too_big = (size * ((rows / size) + 1)) - (size * (rows / size) + rows % size);
+
+    int decrementer = 1;
+    while (too_big > 0) {
+        sendcounts[size - decrementer] -= columns;
+        too_big--;
+        decrementer++;
     }
 
-    printf("Final board:\n");
-    write_board(board, rows, columns); 
 
+    offsets = malloc(sizeof(int) * size);
+    offsets[0] = 0;
+    for (int i = 1; i < size; i++) {
+        offsets[i] = offsets[i - 1] + sendcounts[i];
+    }
+
+    if (rank == 0) {
+    for (int i = 0; i < size; i++) printf("\%d \n", offsets[i]);
+}
+
+    local_board = malloc(sizeof(int) * ( 2 * ((rows / size) * columns) + columns));
+    local_swap_board = malloc(sizeof(int) * ( 2 * ((rows / size) * columns) + columns));
+
+    for (int gen = 0; gen < generations; gen++) {
+        MPI_Scatterv(board, sendcounts, offsets, MPI_INT, local_board + columns, sendcounts[rank], MPI_INT, 0, MPI_COMM_WORLD);
+        if (rank == 0){
+            for (int i = 0; i < columns; i++) local_board[i] = 0;
+            //for (int i = 0; i < sendcounts[rank] + columns + columns; i++) printf("\%d ", local_board[i]);
+        }
+        if (rank == size - 1){
+            int start = sendcounts[rank] + columns;
+            for (int i = start; i < start + columns; i++) local_board[i] = 0;
+            //for (int i = 0; i < sendcounts[rank] + columns + columns; i++) printf("\%d ", local_board[i]);
+        }
+
+        up_nbr = rank + 1;
+        if (up_nbr >= size) up_nbr = MPI_PROC_NULL;
+        down_nbr = rank - 1;
+        if (down_nbr < 0) down_nbr = MPI_PROC_NULL;
+
+        if ((rank % 2) == 0) {
+            /* exchange up */
+            MPI_Sendrecv( local_board + sendcounts[rank], columns, MPI_INT, down_nbr, 0,
+                          local_board + sendcounts[rank] + columns, columns, MPI_INT, down_nbr, 0,
+                          MPI_COMM_WORLD, &status );
+        }
+        else {
+            /* exchange down */
+            MPI_Sendrecv( local_board + columns, columns, MPI_INT, up_nbr, 0,
+                          local_board + (sendcounts[rank]) + columns, columns, MPI_INT, up_nbr, 0,
+                          MPI_COMM_WORLD, &status );
+        }
+
+        /* Do the second set of exchanges */
+        if ((rank % 2) == 1) {
+            /* exchange up */
+            MPI_Sendrecv( local_board + sendcounts[rank], columns, MPI_INT, down_nbr, 0,
+                          local_board + sendcounts[rank] + columns, columns, MPI_INT, down_nbr, 0,
+                          MPI_COMM_WORLD, &status );
+        }
+        else {
+            /* exchange down */
+            MPI_Sendrecv( local_board + columns, columns, MPI_INT, up_nbr, 0,
+                          local_board + (sendcounts[rank]) + columns, columns, MPI_INT, up_nbr, 0,
+                          MPI_COMM_WORLD, &status );
+        }
+
+
+        generation(local_swap_board, local_board, sendcounts[rank]/columns + 2, columns);
+        MPI_Gatherv(local_swap_board + columns, sendcounts[rank], MPI_INT, board, sendcounts, offsets, MPI_INT, 0, MPI_COMM_WORLD);
+
+
+        if (rank == 1) {
+            write_board(local_swap_board, rows, columns);
+        }
+    }
+
+    if (rank == 0) {
+    printf("Final board:\n");
+    write_board(board, rows, columns);
+    }
+
+    free(local_board);
     free(board);
-    free(swap_board);
+    free(local_swap_board);
     return 0;
 }
 
