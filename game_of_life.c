@@ -45,55 +45,56 @@ int main(int argc, char** argv) {
         board = get_initial_board(&rows, &columns);
         rows_columns[0] = rows;
         rows_columns[1] = columns;
-        MPI_Bcast(rows_columns, 2, MPI_INT, 0, MPI_COMM_WORLD);
-        //write_board(board, rows, columns);
+        MPI_Bcast(rows_columns, 2, MPI_INT, 0, MPI_COMM_WORLD);// broadcast size of full board
     }
     else {
-        MPI_Bcast(rows_columns, 2, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(rows_columns, 2, MPI_INT, 0, MPI_COMM_WORLD);// receive broadcast of size of board
         rows = rows_columns[0];
         columns = rows_columns[1];
     }
     generations = atoi(argv[1]);
     //printf("Rows: %d; Columns: %d\n", rows, columns); // debug
 
-    sendcounts = malloc(sizeof(int) * size);
+    sendcounts = malloc(sizeof(int) * size); //array inexed by rank with num elements sent to each process
 
     for (int i = 0; i < size; i++) {
         sendcounts[i] = columns * ((rows / size) + 1);
     }
     int too_big = (size * ((rows / size) + 1)) - (size * (rows / size) + rows % size);
+    //too_big is the number of extra rows I allocated to processes max of 1 extra per process
 
-    int decrementer = 1;
+
+    int decrementer = 1; // used to count backwards in send counts and remove extra rows
     while (too_big > 0) {
-        sendcounts[size - decrementer] -= columns;
+        sendcounts[size - decrementer] -= columns; // remove a row by removing columns number of integers
         too_big--;
         decrementer++;
     }
-
-
-    offsets = malloc(sizeof(int) * size);
+    if (rank == 0) {
+        for (int i = 0; i < size; i++) printf("\%d ", sendcounts[i]);
+    }
+    offsets = malloc(sizeof(int) * size);// array to inform rank 0 where to break up input array
     offsets[0] = 0;
     for (int i = 1; i < size; i++) {
-        offsets[i] = offsets[i - 1] + sendcounts[i];
+        offsets[i] = offsets[i - 1] + sendcounts[i - 1];
+    }
+    if (rank == 0) {
+    for (int i = 0; i < size; i++) printf("\%d ", offsets[i]);
     }
 
-    if (rank == 0) {
-    for (int i = 0; i < size; i++) printf("\%d \n", offsets[i]);
-}
-
-    local_board = malloc(sizeof(int) * ( 2 * ((rows / size) * columns) + columns));
-    local_swap_board = malloc(sizeof(int) * ( 2 * ((rows / size) * columns) + columns));
+    local_board = malloc(sizeof(int) * ( 3 * ((rows / size) * columns) + columns));
+    local_swap_board = malloc(sizeof(int) * ( 3 * ((rows / size) * columns) + columns));
 
     for (int gen = 0; gen < generations; gen++) {
         MPI_Scatterv(board, sendcounts, offsets, MPI_INT, local_board + columns, sendcounts[rank], MPI_INT, 0, MPI_COMM_WORLD);
         if (rank == 0){
             for (int i = 0; i < columns; i++) local_board[i] = 0;
-            //for (int i = 0; i < sendcounts[rank] + columns + columns; i++) printf("\%d ", local_board[i]);
+            //set top ghost row of data to all zeros so as not to influence neighbor count
         }
         if (rank == size - 1){
             int start = sendcounts[rank] + columns;
             for (int i = start; i < start + columns; i++) local_board[i] = 0;
-            //for (int i = 0; i < sendcounts[rank] + columns + columns; i++) printf("\%d ", local_board[i]);
+            //set bottom ghost row of data to all zeros so as not to influence neighbor count
         }
 
         up_nbr = rank + 1;
@@ -103,38 +104,39 @@ int main(int argc, char** argv) {
 
         if ((rank % 2) == 0) {
             /* exchange up */
-            MPI_Sendrecv( local_board + sendcounts[rank], columns, MPI_INT, down_nbr, 0,
-                          local_board + sendcounts[rank] + columns, columns, MPI_INT, down_nbr, 0,
+            MPI_Sendrecv( local_board + sendcounts[rank], columns, MPI_INT, up_nbr, 0,
+                          local_board + sendcounts[rank] + columns, columns, MPI_INT, up_nbr, 0,
                           MPI_COMM_WORLD, &status );
+
         }
         else {
             /* exchange down */
-            MPI_Sendrecv( local_board + columns, columns, MPI_INT, up_nbr, 0,
-                          local_board + (sendcounts[rank]) + columns, columns, MPI_INT, up_nbr, 0,
+            MPI_Sendrecv( local_board + columns, columns, MPI_INT, down_nbr, 0,
+                          local_board, columns, MPI_INT, down_nbr, 0,
                           MPI_COMM_WORLD, &status );
         }
 
         /* Do the second set of exchanges */
         if ((rank % 2) == 1) {
             /* exchange up */
-            MPI_Sendrecv( local_board + sendcounts[rank], columns, MPI_INT, down_nbr, 0,
-                          local_board + sendcounts[rank] + columns, columns, MPI_INT, down_nbr, 0,
+            MPI_Sendrecv( local_board + sendcounts[rank], columns, MPI_INT, up_nbr, 1,
+                          local_board + sendcounts[rank] + columns, columns, MPI_INT, up_nbr, 1,
                           MPI_COMM_WORLD, &status );
         }
         else {
             /* exchange down */
-            MPI_Sendrecv( local_board + columns, columns, MPI_INT, up_nbr, 0,
-                          local_board + (sendcounts[rank]) + columns, columns, MPI_INT, up_nbr, 0,
+            MPI_Sendrecv( local_board + columns, columns, MPI_INT, down_nbr, 1,
+                          local_board, columns, MPI_INT, down_nbr, 1,
                           MPI_COMM_WORLD, &status );
         }
 
 
         generation(local_swap_board, local_board, sendcounts[rank]/columns + 2, columns);
+
         MPI_Gatherv(local_swap_board + columns, sendcounts[rank], MPI_INT, board, sendcounts, offsets, MPI_INT, 0, MPI_COMM_WORLD);
 
-
-        if (rank == 1) {
-            write_board(local_swap_board, rows, columns);
+        if (rank == 0) {
+            write_board(board, rows, columns);
         }
     }
 
