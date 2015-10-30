@@ -25,6 +25,8 @@ int next_value(int cur_val, int neighbors);
 // helper function to convert 2D to 1D index
 int index1D(int r, int c, int columns) { return r * columns + c; }
 
+void swapBrd(int **new_board, int **old_board);
+
 int main(int argc, char** argv) {
     int rows, columns, rank, size, up_nbr, down_nbr;
     int *board, *local_swap_board, *sendcounts, *offsets, *tmp_swap, *rows_columns;
@@ -79,9 +81,8 @@ int main(int argc, char** argv) {
 
     local_board = malloc(sizeof(int) * ( 3 * ((rows / size) * columns) + columns));
     local_swap_board = malloc(sizeof(int) * ( 3 * ((rows / size) * columns) + columns));
-
+    MPI_Scatterv(board, sendcounts, offsets, MPI_INT, local_board + columns, sendcounts[rank], MPI_INT, 0, MPI_COMM_WORLD);
     for (int gen = 0; gen < generations; gen++) {
-        MPI_Scatterv(board, sendcounts, offsets, MPI_INT, local_board + columns, sendcounts[rank], MPI_INT, 0, MPI_COMM_WORLD);
         if (rank == 0){
             for (int i = 0; i < columns; i++) local_board[i] = 0;
             //set top ghost row of data to all zeros so as not to influence neighbor count
@@ -128,8 +129,10 @@ int main(int argc, char** argv) {
 
         generation(local_swap_board, local_board, sendcounts[rank]/columns + 2, columns);
 
-        MPI_Gatherv(local_swap_board + columns, sendcounts[rank], MPI_INT, board, sendcounts, offsets, MPI_INT, 0, MPI_COMM_WORLD);
+        swapBrd(&local_board, &local_swap_board);
+
     }
+    MPI_Gatherv(local_board + columns, sendcounts[rank], MPI_INT, board, sendcounts, offsets, MPI_INT, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
     printf("Final board:\n");
@@ -140,6 +143,12 @@ int main(int argc, char** argv) {
     free(board);
     free(local_swap_board);
     return 0;
+}
+
+void swapBrd(int **new_board, int **old_board){
+    int *temp = *new_board;
+    *new_board = *old_board;
+    *old_board = temp;
 }
 
 int* get_initial_board(int* rows, int* columns) {
