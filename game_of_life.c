@@ -70,16 +70,11 @@ int main(int argc, char** argv) {
         too_big--;
         decrementer++;
     }
-    if (rank == 0) {
-        for (int i = 0; i < size; i++) printf("\%d ", sendcounts[i]);
-    }
+
     offsets = malloc(sizeof(int) * size);// array to inform rank 0 where to break up input array
     offsets[0] = 0;
     for (int i = 1; i < size; i++) {
         offsets[i] = offsets[i - 1] + sendcounts[i - 1];
-    }
-    if (rank == 0) {
-    for (int i = 0; i < size; i++) printf("\%d ", offsets[i]);
     }
 
     local_board = malloc(sizeof(int) * ( 3 * ((rows / size) * columns) + columns));
@@ -134,10 +129,6 @@ int main(int argc, char** argv) {
         generation(local_swap_board, local_board, sendcounts[rank]/columns + 2, columns);
 
         MPI_Gatherv(local_swap_board + columns, sendcounts[rank], MPI_INT, board, sendcounts, offsets, MPI_INT, 0, MPI_COMM_WORLD);
-
-        if (rank == 0) {
-            write_board(board, rows, columns);
-        }
     }
 
     if (rank == 0) {
